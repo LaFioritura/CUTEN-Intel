@@ -1,28 +1,283 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import * as Tone from 'tone';
-import { AudioEngine } from '@/AudioEngine';
-import { getArtistScore, type MusicScore } from '@/aiService';
-import { generateAlgorithmicPatterns } from '@/algorithmicComposer';
-import { buildFallbackScore } from '@/src/lib/fallbackScore';
-import { consumeJsonExport, defaultCommerceState, grantJsonBundle, JSON_EXPORT_BUNDLE_PRICE_EUR, JSON_EXPORT_BUNDLE_SIZE, JSON_EXPORT_FREE_LIMIT, loadCommerceState, RECORDING_DOWNLOAD_PRICE_EUR, saveCommerceState, unlockRecordingDownload, type CommerceState } from '@/src/lib/commerce';
-import { SCENE_PRESETS } from '@/src/lib/presets';
-import type { EngineSnapshot } from '@/src/types/app';
-const STEP_COUNT=16; const NOTE_SEQUENCE=['C2','D2','D#2','F2','G2','A2','A#2','C3'];
-function hashString(input:string){let hash=0;for(let i=0;i<input.length;i+=1){hash=(hash<<5)-hash+input.charCodeAt(i);hash|=0;}return hash;}
-function clamp(value:number,min=0,max=1){return Math.min(max,Math.max(min,value));}
-function downloadBlob(blob:Blob,filename:string){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);}
-export default function App(){const engineRef=useRef<AudioEngine|null>(null);const loopIdRef=useRef<number|null>(null);const stepRef=useRef(0);const snapshotRef=useRef<EngineSnapshot|null>(null);const [prompt,setPrompt]=useState('dark industrial extraction with unique moments and pressure');const [vectorX,setVectorX]=useState(0.68);const [vectorY,setVectorY]=useState(0.42);const [status,setStatus]=useState<'idle'|'loading'|'ready'|'playing'|'error'>('idle');const [message,setMessage]=useState('Ready to extract a unique musical moment.');const [currentStep,setCurrentStep]=useState(0);const [source,setSource]=useState<'ai'|'fallback'>('fallback');const [snapshot,setSnapshot]=useState<EngineSnapshot|null>(null);const [commerce,setCommerce]=useState<CommerceState>(defaultCommerceState());
-useEffect(()=>{setCommerce(loadCommerceState());},[]); useEffect(()=>{saveCommerceState(commerce);},[commerce]);
-const exportLabel=useMemo(()=>commerce.freeJsonRemaining>0?`${commerce.freeJsonRemaining} free exports left`:commerce.paidJsonCredits>0?`${commerce.paidJsonCredits} paid exports left`:'No export credits left',[commerce]);
-const ensureEngine=useCallback(()=>{if(!engineRef.current) engineRef.current=AudioEngine.getInstance(); return engineRef.current;},[]);
-const scheduleTransport=useCallback((score:MusicScore,patterns:EngineSnapshot['patterns'])=>{const engine=ensureEngine(); if(loopIdRef.current!==null){Tone.Transport.clear(loopIdRef.current); loopIdRef.current=null;} stepRef.current=0; Tone.Transport.bpm.value=score.bpm; loopIdRef.current=Tone.Transport.scheduleRepeat((time)=>{const step=stepRef.current%STEP_COUNT; if(patterns.kick[step]>0){engine.drumKick.triggerAttackRelease('C1','8n',time,0.75+patterns.kick[step]*0.25); engine.triggerSidechain(time);} if(patterns.snare[step]>0){engine.drumSnare.triggerAttackRelease('16n',time,0.4+patterns.snare[step]*0.45);} if(patterns.hihat[step]>0){engine.drumHihat.triggerAttackRelease('32n',time,0.18+patterns.hihat[step]*0.28);} if(patterns.perc[step]>0){engine.drumPerc.triggerAttackRelease('G5','16n',time,0.18+patterns.perc[step]*0.22);} if(patterns.glitch[step]>0){engine.glitchSynth.triggerAttackRelease('64n',time,0.14+patterns.glitch[step]*0.18);} if(patterns.sub[step]>0){engine.subBass.triggerAttackRelease(NOTE_SEQUENCE[step%NOTE_SEQUENCE.length],'16n',time,0.22);} if(patterns.acid[step]>0){const lead=score.leadPhrase.length?score.leadPhrase:['C4']; engine.acidSynth.triggerAttackRelease(lead[step%lead.length],'16n',time,0.16+patterns.acid[step]*0.12);} if(patterns.spectral[step]>0){const spectral=Tone.Frequency(score.leadPhrase[step%score.leadPhrase.length]??'C4').toFrequency(); engine.spectralLead.frequency.rampTo(spectral,0.03); engine.ribbonGain.gain.rampTo(0.22*patterns.spectral[step],0.04);} else {engine.ribbonGain.gain.rampTo(0,0.06);} if(patterns.neuro[step]>0){const neuro=Tone.Frequency(score.padChords[step%score.padChords.length]??'C2').toFrequency(); engine.curveFilter.frequency.rampTo(240+step*90,0.06); engine.neuroBass.frequency.rampTo(neuro,0.03); engine.curveGain.gain.rampTo(0.12+patterns.neuro[step]*0.18,0.05);} else {engine.curveGain.gain.rampTo(0,0.08);} if(step%4===0){engine.spacePad.triggerAttackRelease(score.padChords,'1m',time,0.12+score.dna.darkness*0.08);} if(step===0){engine.droneSynth.frequency.rampTo(score.droneFrequency,0.15); engine.droneSynth.volume.rampTo(-34+score.intensity*8,0.1); engine.pressureGain.gain.rampTo(0.04+score.effects.glitchAmount*0.06,0.1);} stepRef.current+=1; setCurrentStep(step);},'16n');},[ensureEngine]);
-const buildSnapshot=useCallback((score:MusicScore,sourceMode:'ai'|'fallback',inputPrompt:string,x:number,y:number):EngineSnapshot=>{const algorithmic=generateAlgorithmicPatterns(score.dna);const enhanced={...algorithmic,perc:algorithmic.perc.map((v,i)=>v||((i%8===3||i%8===7)?clamp(score.dna.industrial*0.6):0)),glitch:algorithmic.glitch.map((v,i)=>v||((i===15||i===11)?clamp(score.effects.glitchAmount):0)),spectral:algorithmic.spectral.map((v,i)=>v||((i%4===2)?clamp(0.4+score.dna.complexity*0.4):0))};return{score,patterns:enhanced,generatedAt:new Date().toISOString(),source:sourceMode,prompt:inputPrompt,vector:{x,y}};},[]);
-const generateScene=useCallback(async (override?:{prompt?:string;x?:number;y?:number})=>{const nextPrompt=override?.prompt??prompt; const x=override?.x??vectorX; const y=override?.y??vectorY; setStatus('loading'); setMessage('Generating a new extraction scene...'); try{const aiScore=await getArtistScore('C-HELL Extractor',nextPrompt,{x,y}); const normalized={...aiScore,intensity:clamp(aiScore.intensity),dna:{complexity:clamp(aiScore.dna.complexity),energy:clamp(aiScore.dna.energy),darkness:clamp(aiScore.dna.darkness),industrial:clamp(aiScore.dna.industrial)}} satisfies MusicScore; const nextSnapshot=buildSnapshot(normalized,'ai',nextPrompt,x,y); snapshotRef.current=nextSnapshot; setSnapshot(nextSnapshot); setSource('ai'); setStatus('ready'); setMessage(normalized.artistCommentary||'AI director generated a new scene.'); scheduleTransport(normalized,nextSnapshot.patterns); ensureEngine().setParams(normalized.intensity,normalized.effects.distortion);} catch(e){console.error(e); const fallback=buildFallbackScore(hashString(nextPrompt),nextPrompt,x,y); const nextSnapshot=buildSnapshot(fallback,'fallback',nextPrompt,x,y); snapshotRef.current=nextSnapshot; setSnapshot(nextSnapshot); setSource('fallback'); setStatus('ready'); setMessage('Cloud AI unavailable. Local fallback director preserved the session.'); scheduleTransport(fallback,nextSnapshot.patterns); ensureEngine().setParams(fallback.intensity,fallback.effects.distortion);}},[buildSnapshot,ensureEngine,prompt,scheduleTransport,vectorX,vectorY]);
-useEffect(()=>{void generateScene();},[]);
-const startPlayback=useCallback(async()=>{const engine=ensureEngine(); if(!snapshotRef.current) await generateScene(); await engine.start(); await engine.recorder.start(); setStatus('playing'); setMessage('Extraction running. Every pass is a unique moment.');},[ensureEngine,generateScene]);
-const stopPlayback=useCallback(async()=>{ensureEngine().stop(); setStatus('ready'); setMessage('Transport stopped. Latest scene remains loaded.');},[ensureEngine]);
-const exportJson=useCallback(()=>{const current=snapshotRef.current; if(!current){setMessage('Generate a scene first.'); return;} try{const next=consumeJsonExport(commerce); setCommerce(next); const payload={product:'C-HELL Extractor',monetization:{freeJsonLimit:JSON_EXPORT_FREE_LIMIT,jsonBundle:{priceEUR:JSON_EXPORT_BUNDLE_PRICE_EUR,credits:JSON_EXPORT_BUNDLE_SIZE},recordingDownloadPriceEUR:RECORDING_DOWNLOAD_PRICE_EUR},scene:current}; downloadBlob(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),`chell-scene-${Date.now()}.json`); setMessage('JSON scene exported successfully.');}catch{setMessage('No JSON export credits available. Unlock 4 more exports for €3.');}},[commerce]);
-const unlockJsonCredits=useCallback(()=>{setCommerce(prev=>grantJsonBundle(prev)); setMessage('4 additional JSON exports unlocked for €3. Replace this local grant with real checkout later.');},[]);
-const unlockRecDownload=useCallback(()=>{setCommerce(prev=>unlockRecordingDownload(prev)); setMessage('Recording download permanently unlocked for €9.99 on this browser profile.');},[]);
-const downloadRecording=useCallback(async()=>{const engine=ensureEngine(); if(!commerce.recordingDownloadUnlocked){setMessage('Recording download is paid: €9.99.'); return;} try{const recording=await engine.recorder.stop(); downloadBlob(recording,`chell-recording-${Date.now()}.webm`); setMessage('Recording exported.');}catch(e){console.error(e); setMessage('No recording available yet. Start playback first to capture audio.');}},[commerce.recordingDownloadUnlocked,ensureEngine]);
-return <div className="shell"><header className="hero card"><div><p className="eyebrow">C-HELL Extractor</p><h1>Unique music extraction engine</h1><p className="lead">Fully usable for free. The app generates and performs unique musical moments, while monetization only applies to exports and recording download.</p></div><div className="status-panel"><span className={`status-pill ${status}`}>{status}</span><span className="status-pill alt">Director: {source}</span><p>{message}</p></div></header><main className="grid"><section className="card controls"><h2>Direction</h2><label>Prompt<textarea value={prompt} onChange={e=>setPrompt(e.target.value)} rows={4} /></label><label>Brutal ↔ Ethereal<input type="range" min="0" max="1" step="0.01" value={vectorX} onChange={e=>setVectorX(Number(e.target.value))} /></label><label>Static ↔ Chaotic<input type="range" min="0" max="1" step="0.01" value={vectorY} onChange={e=>setVectorY(Number(e.target.value))} /></label><div className="button-row"><button onClick={()=>void generateScene()}>Generate scene</button><button onClick={()=>void startPlayback()} disabled={status==='playing'}>Start</button><button className="secondary" onClick={()=>void stopPlayback()} disabled={status!=='playing'}>Stop</button></div></section><section className="card monetization"><h2>Freemium rules</h2><div className="pricing-box"><div><strong>JSON exports</strong><p>3 free exports, then €3 for every pack of 4 exports.</p></div><div className="pricing-actions"><button onClick={exportJson}>Export JSON</button><button className="secondary" onClick={unlockJsonCredits}>Unlock 4 exports — €3</button></div><small>{exportLabel}</small></div><div className="pricing-box"><div><strong>Recording download</strong><p>Playback remains free. Downloading the recording costs €9.99.</p></div><div className="pricing-actions"><button onClick={()=>void downloadRecording()}>Download rec</button><button className="secondary" onClick={unlockRecDownload} disabled={commerce.recordingDownloadUnlocked}>{commerce.recordingDownloadUnlocked?'Unlocked':'Unlock recording — €9.99'}</button></div></div><div className="ledger"><span>Simulated revenue</span><strong>€ {commerce.simulatedRevenue.toFixed(2)}</strong></div><p className="muted">Checkout is productized in the interface and state model. Replace the local unlock actions with Stripe or another payment flow when you are ready to sell.</p></section><section className="card scene-browser"><h2>Client-facing scene starters</h2><div className="scene-list">{SCENE_PRESETS.map(scene=><button key={scene.id} className="scene-card" onClick={()=>{setPrompt(scene.prompt); setVectorX(scene.vector.x); setVectorY(scene.vector.y); void generateScene({prompt:scene.prompt,x:scene.vector.x,y:scene.vector.y});}}><strong>{scene.name}</strong><span>{scene.description}</span></button>)}</div></section><section className="card engine-view"><h2>Current extraction</h2>{snapshot? <><div className="metrics"><article><span>BPM</span><strong>{snapshot.score.bpm}</strong></article><article><span>Intensity</span><strong>{snapshot.score.intensity.toFixed(2)}</strong></article><article><span>Tension</span><strong>{snapshot.score.tensionLevel.toFixed(2)}</strong></article><article><span>Current step</span><strong>{currentStep+1}/{STEP_COUNT}</strong></article></div><div className="dna-grid">{Object.entries(snapshot.score.dna).map(([key,value])=><div key={key}><span>{key}</span><div className="bar"><i style={{width:`${value*100}%`}} /></div></div>)}</div><div className="pattern-grid">{Object.entries(snapshot.patterns).map(([lane,pattern])=><div key={lane}><span>{lane}</span><div className="steps">{pattern.map((value,index)=><i key={`${lane}-${index}`} className={index===currentStep?'active':value>0?'filled':''} />)}</div></div>)}</div></> : <p className="muted">No scene loaded yet.</p>}</section></main></div>;}
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ChangeEvent } from 'react';
+import { AudioEngine } from './audio/AudioEngine';
+import { LaneEditor } from './components/LaneEditor';
+import { MacroPanel } from './components/MacroPanel';
+import { Matrix } from './components/Matrix';
+import { canExportJson, consumeJsonExport, loadCommerceState, saveCommerceState, unlockJsonPack, unlockRecording } from './lib/commerce';
+import { getDirectedScore } from './lib/aiDirector';
+import { mutateLanePattern, randomizeSingleStep, regenerateLane } from './lib/patternEngine';
+import { createDefaultLanes, defaultMacros, laneOrder, scenePresets } from './lib/presets';
+import type { CommerceState, LaneId, LaneState, Macros, MusicScore } from './types/app';
+
+const clamp = (value: number) => Math.max(0, Math.min(1, value));
+
+export default function App() {
+  const engineRef = useRef(AudioEngine.getInstance());
+  const [lanes, setLanes] = useState<LaneState[]>(createDefaultLanes());
+  const [macros, setMacros] = useState<Macros>(defaultMacros);
+  const [selectedLane, setSelectedLane] = useState<LaneId>('kick');
+  const [sceneId, setSceneId] = useState(scenePresets[0].id);
+  const [bpm, setBpm] = useState<number>(126);
+  const [running, setRunning] = useState<boolean>(false);
+  const [currentStep, setCurrentStep] = useState<number>(0);
+  const [barSeed, setBarSeed] = useState<number>(1);
+  const [score, setScore] = useState<MusicScore | null>(null);
+  const [commerce, setCommerce] = useState<CommerceState>(() => loadCommerceState());
+  const [recording, setRecording] = useState<boolean>(false);
+  const [status, setStatus] = useState<string>('IDLE');
+  const [log, setLog] = useState<string[]>(['OPERATOR BUILD READY']);
+
+  const scene = useMemo(() => scenePresets.find((preset) => preset.id === sceneId) ?? scenePresets[0], [sceneId]);
+  const selectedLaneState = lanes.find((lane) => lane.id === selectedLane) ?? lanes[0];
+
+  useEffect(() => saveCommerceState(commerce), [commerce]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setCurrentStep((value: number) => (running ? (value + 1) % 16 : value));
+    }, (60 / Math.max(40, bpm)) * 250);
+    return () => window.clearInterval(timer);
+  }, [running, bpm]);
+
+  useEffect(() => {
+    engineRef.current.applyMacros(macros);
+    engineRef.current.setBpm(bpm);
+  }, [macros, bpm]);
+
+  const pushLog = (message: string) => {
+    setLog((current: string[]) => [message, ...current].slice(0, 12));
+  };
+
+  const patchLane = (laneId: LaneId, patch: Partial<LaneState>) => {
+    setLanes((current: LaneState[]) => current.map((lane: LaneState) => (lane.id === laneId ? { ...lane, ...patch } : lane)));
+  };
+
+  const toggleStep = (laneId: LaneId, index: number) => {
+    setLanes((current: LaneState[]) => current.map((lane: LaneState) => (lane.id === laneId ? randomizeSingleStep(lane, index) : lane)));
+  };
+
+  const handleMutateLane = (laneId: LaneId) => {
+    setBarSeed((seed: number) => seed + 1);
+    setLanes((current: LaneState[]) => current.map((lane: LaneState) => (lane.id === laneId ? mutateLanePattern(lane, macros, barSeed) : lane)));
+    pushLog(`${laneId.toUpperCase()} lane mutated.`);
+  };
+
+  const handleSceneLoad = async (nextSceneId: string) => {
+    const preset = scenePresets.find((item) => item.id === nextSceneId);
+    if (!preset) return;
+    setSceneId(nextSceneId);
+    setBpm(preset.bpm);
+    setMacros(preset.macros);
+    setLanes((current: LaneState[]) => current.map((lane: LaneState) => ({ ...lane, ...preset.laneTweaks[lane.id] })));
+    setStatus('DIRECTING');
+    const nextScore = await getDirectedScore(preset.macros, preset.name);
+    setScore(nextScore);
+    setStatus('SCENE LOADED');
+    pushLog(`Scene ${preset.name} loaded.`);
+  };
+
+  const handleRun = async () => {
+    if (running) {
+      engineRef.current.stop();
+      setRunning(false);
+      setStatus('STOPPED');
+      pushLog('Transport stopped.');
+      return;
+    }
+    await engineRef.current.start(lanes, macros, bpm);
+    setRunning(true);
+    setStatus('RUNNING');
+    pushLog(`Transport started at ${bpm} BPM.`);
+  };
+
+  const handleAutoDirect = async () => {
+    setStatus('DIRECTING');
+    const nextScore = await getDirectedScore(macros, scene.name);
+    setScore(nextScore);
+    setBpm(nextScore.bpm);
+    setMacros((current: Macros) => ({
+      ...current,
+      energy: clamp(nextScore.dna.energy),
+      tension: clamp(nextScore.tensionLevel),
+      darkness: clamp(nextScore.dna.darkness),
+      complexity: clamp(nextScore.dna.complexity),
+      space: clamp(nextScore.effects.reverbSend + 0.1),
+      glitch: clamp(nextScore.effects.glitchAmount)
+    }));
+    pushLog('AI/local director refreshed the scene.');
+    setStatus('READY');
+  };
+
+  const handleRegenerateAll = () => {
+    setBarSeed((seed: number) => seed + 1);
+    setLanes((current: LaneState[]) => current.map((lane: LaneState, index: number) => regenerateLane(lane, macros, barSeed + index)));
+    pushLog('All lanes regenerated from current DNA.');
+  };
+
+  const exportPayload = {
+    meta: {
+      app: 'C-HELL Extractor V2 // Operator Edition',
+      scene: scene.name,
+      bpm,
+      exportedAt: new Date().toISOString()
+    },
+    commerce,
+    macros,
+    lanes,
+    score
+  };
+
+  const handleExportJson = () => {
+    if (!canExportJson(commerce)) {
+      pushLog('JSON export blocked. Unlock 4 exports for €3.');
+      return;
+    }
+
+    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `chell-extractor-${scene.id}-${Date.now()}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setCommerce((current: CommerceState) => consumeJsonExport(current));
+    pushLog('JSON exported.');
+  };
+
+  const handleUnlockExports = () => {
+    setCommerce((current: CommerceState) => unlockJsonPack(current));
+    pushLog('4 JSON exports unlocked for €3.');
+  };
+
+  const handleUnlockRecording = () => {
+    setCommerce((current: CommerceState) => unlockRecording(current));
+    pushLog('Recording download unlocked for €9.99.');
+  };
+
+  const handleRecording = async () => {
+    if (!commerce.recordingUnlocked) {
+      pushLog('Recording download locked. Unlock for €9.99.');
+      return;
+    }
+
+    if (!recording) {
+      await engineRef.current.startRecording();
+      setRecording(true);
+      pushLog('Recording armed.');
+      return;
+    }
+
+    const blob = await engineRef.current.stopRecording();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `chell-recording-${Date.now()}.webm`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setRecording(false);
+    pushLog('Recording downloaded.');
+  };
+
+  return (
+    <div className="shell">
+      <header className="topbar panel">
+        <div>
+          <div className="eyebrow">C-HELL EXTRACTOR V2</div>
+          <h1>OPERATOR EDITION</h1>
+        </div>
+        <div className="topbar-controls">
+          <button className="primary-btn" onClick={handleRun}>{running ? 'STOP' : 'PLAY'}</button>
+          <button className="secondary-btn" onClick={handleAutoDirect}>DIRECT</button>
+          <button className="secondary-btn" onClick={handleRegenerateAll}>REBUILD</button>
+          <label className="compact-field">
+            BPM
+            <input type="number" min={70} max={180} value={bpm} onChange={(event: ChangeEvent<HTMLInputElement>) => setBpm(Number(event.target.value))} />
+          </label>
+          <label className="compact-field select-wrap">
+            SCENE
+            <select value={sceneId} onChange={(event: ChangeEvent<HTMLSelectElement>) => void handleSceneLoad(event.target.value)}>
+              {scenePresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+            </select>
+          </label>
+          <div className="status-box">
+            <span>STATE</span>
+            <strong>{status}</strong>
+          </div>
+        </div>
+      </header>
+
+      <main className="layout">
+        <aside className="left-column">
+          <MacroPanel macros={macros} onChange={(patch: Partial<Macros>) => setMacros((current: Macros) => ({ ...current, ...patch }))} />
+          <div className="panel commerce-panel">
+            <div className="panel-title">ECONOMY</div>
+            <div className="commerce-row"><span>FREE JSON</span><strong>{commerce.freeJsonRemaining}</strong></div>
+            <div className="commerce-row"><span>PAID JSON</span><strong>{commerce.paidJsonCredits}</strong></div>
+            <div className="commerce-row"><span>REC DOWNLOAD</span><strong>{commerce.recordingUnlocked ? 'UNLOCKED' : 'LOCKED'}</strong></div>
+            <div className="commerce-row"><span>REVENUE</span><strong>€ {commerce.totalRevenue.toFixed(2)}</strong></div>
+            <button className="secondary-btn block-btn" onClick={handleExportJson}>EXPORT JSON</button>
+            <button className="secondary-btn block-btn" onClick={handleUnlockExports}>UNLOCK 4 EXPORTS — €3</button>
+            <button className="secondary-btn block-btn" onClick={handleRecording}>{recording ? 'STOP + DOWNLOAD REC' : 'REC / DOWNLOAD'}</button>
+            <button className="secondary-btn block-btn" onClick={handleUnlockRecording}>UNLOCK REC — €9.99</button>
+          </div>
+        </aside>
+
+        <section className="center-column">
+          <Matrix lanes={lanes} currentStep={currentStep} onToggle={toggleStep} />
+          <div className="panel scene-panel">
+            <div className="panel-title">SCENE MEMORY</div>
+            <div className="scene-headline">
+              <strong>{scene.name}</strong>
+              <span>{scene.description}</span>
+            </div>
+            {score && (
+              <div className="score-box">
+                <div><strong>DIRECTOR:</strong> {score.influence}</div>
+                <div><strong>MOOD:</strong> {score.mood}</div>
+                <div><strong>PHASE:</strong> {score.arrangementPhase}</div>
+                <div><strong>COMMENT:</strong> {score.artistCommentary}</div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <aside className="right-column panel">
+          <div className="panel-title">LANE CONTROL</div>
+          <div className="lane-stack">
+            {laneOrder.map((laneId) => {
+              const lane = lanes.find((item) => item.id === laneId)!;
+              return (
+                <LaneEditor
+                  key={lane.id}
+                  lane={lane}
+                  selected={selectedLane === lane.id}
+                  onSelect={() => setSelectedLane(lane.id)}
+                  onPatch={(patch: Partial<LaneState>) => patchLane(lane.id, patch)}
+                  onRandomize={() => handleMutateLane(lane.id)}
+                />
+              );
+            })}
+          </div>
+        </aside>
+      </main>
+
+      <footer className="bottom-strip panel">
+        <div className="bottom-left">
+          <div className="panel-title">SELECTED LANE</div>
+          <div className="lane-details">
+            <strong>{selectedLaneState.label}</strong>
+            <span>Steps active: {selectedLaneState.steps.filter((value: number) => value > 0).length} / 16</span>
+            <span>Muted: {selectedLaneState.muted ? 'YES' : 'NO'} / Solo: {selectedLaneState.solo ? 'YES' : 'NO'}</span>
+          </div>
+        </div>
+        <div className="bottom-right">
+          <div className="panel-title">EVENT LOG</div>
+          <div className="log-list">
+            {log.map((entry: string, index: number) => <div key={`${entry}-${index}`}>{entry}</div>)}
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+}

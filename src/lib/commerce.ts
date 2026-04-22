@@ -1,9 +1,54 @@
-export const STORAGE_KEY='chell-freemium-v1';
-export const JSON_EXPORT_BUNDLE_SIZE=4; export const JSON_EXPORT_BUNDLE_PRICE_EUR=3; export const JSON_EXPORT_FREE_LIMIT=3; export const RECORDING_DOWNLOAD_PRICE_EUR=9.99;
-export interface CommerceState{freeJsonRemaining:number;paidJsonCredits:number;recordingDownloadUnlocked:boolean;simulatedRevenue:number;purchaseHistory:Array<{kind:'json_bundle'|'recording_unlock';amount:number;createdAt:string;}>;}
-export const defaultCommerceState=():CommerceState=>({freeJsonRemaining:JSON_EXPORT_FREE_LIMIT,paidJsonCredits:0,recordingDownloadUnlocked:false,simulatedRevenue:0,purchaseHistory:[]});
-export function loadCommerceState():CommerceState{try{const raw=localStorage.getItem(STORAGE_KEY);if(!raw)return defaultCommerceState();const parsed=JSON.parse(raw) as Partial<CommerceState>;return {...defaultCommerceState(),...parsed,purchaseHistory:parsed.purchaseHistory??[]};}catch{return defaultCommerceState();}}
-export function saveCommerceState(state:CommerceState){localStorage.setItem(STORAGE_KEY,JSON.stringify(state));}
-export function consumeJsonExport(state:CommerceState):CommerceState{if(state.freeJsonRemaining>0)return {...state,freeJsonRemaining:state.freeJsonRemaining-1}; if(state.paidJsonCredits>0)return {...state,paidJsonCredits:state.paidJsonCredits-1}; throw new Error('No JSON export credits available.');}
-export function grantJsonBundle(state:CommerceState):CommerceState{return {...state,paidJsonCredits:state.paidJsonCredits+JSON_EXPORT_BUNDLE_SIZE,simulatedRevenue:Number((state.simulatedRevenue+JSON_EXPORT_BUNDLE_PRICE_EUR).toFixed(2)),purchaseHistory:[{kind:'json_bundle',amount:JSON_EXPORT_BUNDLE_PRICE_EUR,createdAt:new Date().toISOString()},...state.purchaseHistory]};}
-export function unlockRecordingDownload(state:CommerceState):CommerceState{return {...state,recordingDownloadUnlocked:true,simulatedRevenue:Number((state.simulatedRevenue+RECORDING_DOWNLOAD_PRICE_EUR).toFixed(2)),purchaseHistory:[{kind:'recording_unlock',amount:RECORDING_DOWNLOAD_PRICE_EUR,createdAt:new Date().toISOString()},...state.purchaseHistory]};}
+import type { CommerceState } from '../types/app';
+
+const STORAGE_KEY = 'chell-commerce-state-v2';
+
+const defaultCommerce: CommerceState = {
+  freeJsonRemaining: 3,
+  paidJsonCredits: 0,
+  recordingUnlocked: false,
+  totalRevenue: 0
+};
+
+export function loadCommerceState(): CommerceState {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? { ...defaultCommerce, ...JSON.parse(raw) } : defaultCommerce;
+  } catch {
+    return defaultCommerce;
+  }
+}
+
+export function saveCommerceState(state: CommerceState): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+export function canExportJson(state: CommerceState): boolean {
+  return state.freeJsonRemaining > 0 || state.paidJsonCredits > 0;
+}
+
+export function consumeJsonExport(state: CommerceState): CommerceState {
+  if (state.freeJsonRemaining > 0) {
+    return { ...state, freeJsonRemaining: state.freeJsonRemaining - 1 };
+  }
+  if (state.paidJsonCredits > 0) {
+    return { ...state, paidJsonCredits: state.paidJsonCredits - 1 };
+  }
+  return state;
+}
+
+export function unlockJsonPack(state: CommerceState): CommerceState {
+  return {
+    ...state,
+    paidJsonCredits: state.paidJsonCredits + 4,
+    totalRevenue: Number((state.totalRevenue + 3).toFixed(2))
+  };
+}
+
+export function unlockRecording(state: CommerceState): CommerceState {
+  if (state.recordingUnlocked) return state;
+  return {
+    ...state,
+    recordingUnlocked: true,
+    totalRevenue: Number((state.totalRevenue + 9.99).toFixed(2))
+  };
+}

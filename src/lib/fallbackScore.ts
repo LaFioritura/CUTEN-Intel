@@ -1,4 +1,35 @@
-import type { MusicScore } from '@/aiService';
-const NOTE_SETS=[['C2','G2','Bb2','D#3'],['D2','A2','C3','F3'],['F2','C3','Eb3','Ab3'],['A1','E2','G2','C3']];
-const LEAD_LINES=[['C4','D#4','G4','A#4','G4','D#4','C4','G3'],['D4','F4','A4','C5','A4','F4','D4','C4'],['F4','G4','A#4','C5','A#4','G4','F4','D#4'],['A3','C4','E4','G4','E4','C4','A3','G3']];
-export function buildFallbackScore(seed:number,prompt:string,x:number,y:number):MusicScore{const n=Math.abs(seed)%4;const energy=Math.min(1,0.3+x*0.6+y*0.2);const complexity=Math.min(1,0.25+y*0.5+(prompt.length%9)/20);const darkness=Math.min(1,0.45+(prompt.toLowerCase().includes('dark')?0.2:0)+(1-x)*0.15);const industrial=Math.min(1,0.35+x*0.3+(prompt.toLowerCase().includes('metal')?0.2:0));return{bpm:Math.round(108+x*32+y*12),mood:'Pressure extraction',intensity:energy,structure:energy>0.72?'climax':y>0.6?'fragmentation':'industrial_flow',influence:'C-HELL core',arrangementPhase:energy>0.7?'peak':energy<0.45?'exploration':'decay',tensionLevel:Math.min(1,0.4+y*0.5),harmonicFocus:'low register cluster',bunkerAesthetic:'machine pressure / bunker ritual',dna:{complexity,energy,darkness,industrial},leadPhrase:LEAD_LINES[n],padChords:NOTE_SETS[n],droneFrequency:28+n*7+Math.round(y*8),effects:{distortion:0.1+industrial*0.22,bitcrush:Math.round(industrial*2),filterCutoff:Math.round(800+energy*8200),resonance:2+complexity*8,delaySend:0.12+complexity*0.18,reverbSend:0.12+darkness*0.24,glitchAmount:0.1+complexity*0.25,rumbleDecay:0.2+industrial*0.45},artistCommentary:'Fallback director active. Local composition engine preserved continuity without cloud guidance.'};}
+import type { Macros, MusicScore } from '../types/app';
+
+export function makeFallbackScore(macros: Macros, sceneName: string): MusicScore {
+  return {
+    bpm: 118 + Math.round(macros.energy * 28),
+    mood: sceneName,
+    intensity: macros.energy,
+    structure: macros.space > 0.5 ? 'empty_space' : macros.glitch > 0.4 ? 'fragmentation' : 'industrial_flow',
+    arrangementPhase: macros.tension > 0.75 ? 'peak' : macros.energy < 0.45 ? 'decay' : 'exploration',
+    tensionLevel: macros.tension,
+    harmonicFocus: macros.darkness > 0.7 ? 'minor pressure node' : 'neutral node',
+    influence: 'local fallback director',
+    bunkerAesthetic: 'operator build / steel chamber / dry voltage',
+    dna: {
+      complexity: macros.complexity,
+      energy: macros.energy,
+      darkness: macros.darkness,
+      industrial: Math.min(1, (macros.tension + macros.glitch) / 2)
+    },
+    leadPhrase: ['C4', 'D#4', 'G4', 'A#4', 'G4', 'F4', 'D#4', 'C4'],
+    padChords: ['C2', 'G2', 'A#2', 'D#3'],
+    droneFrequency: 32 + Math.round(macros.darkness * 24),
+    effects: {
+      distortion: 0.1 + macros.tension * 0.35,
+      bitcrush: 0.05 + macros.glitch * 0.25,
+      filterCutoff: 0.25 + macros.energy * 0.55,
+      resonance: 0.12 + macros.tension * 0.32,
+      delaySend: 0.08 + macros.space * 0.22,
+      reverbSend: 0.08 + macros.space * 0.28,
+      glitchAmount: macros.glitch,
+      rumbleDecay: 0.18 + macros.darkness * 0.45
+    },
+    artistCommentary: 'Local score generated. Increase tension and variation for a harder extraction window.'
+  };
+}
