@@ -24,9 +24,24 @@ import {
 } from 'lucide-react';
 import { AudioEngine } from './engine/AudioEngine';
 import { getArtistScore, MusicScore } from './services/aiService';
+import { generateAlgorithmicPatterns, generateAlgorithmicAutomation, ComposerDNA } from './services/algorithmicComposer';
 
 const STEPS = 16;
 const INITIAL_BPM = 174;
+
+const safe = (val: any, def: number): number => {
+  const n = parseFloat(val);
+  return (Number.isFinite(n)) ? n : def;
+};
+
+const safeFreq = (note: string, defFreq: number = 440): number => {
+  try {
+    const f = Tone.Frequency(note).toFrequency();
+    return Number.isFinite(f) && f > 0 ? f : defFreq;
+  } catch {
+    return defFreq;
+  }
+};
 
 export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -58,14 +73,20 @@ export default function App() {
   const engineRef = useRef<AudioEngine | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const analyserRef = useRef<Tone.Analyser | null>(null);
+  const scoreRef = useRef<MusicScore | null>(null);
 
-  // Sync Ribbon & Curves to Engine
+  // Sync Ribbon & Curves to Engine (removed continuous bleed logic)
   useEffect(() => {
-    if (engineRef.current) {
-      engineRef.current.ribbonGain.gain.setTargetAtTime(ribbonValue, Tone.now(), 0.1);
-      engineRef.current.curveGain.gain.setTargetAtTime(curvePoints[currentStep % 4], Tone.now(), 0.1);
+    if (!isPlaying && engineRef.current) {
+      engineRef.current.curveGain.gain.setValueAtTime(0, Tone.now());
+      engineRef.current.ribbonGain.gain.setValueAtTime(0, Tone.now());
     }
-  }, [ribbonValue, curvePoints, currentStep]);
+  }, [isPlaying]);
+
+  // INITIALIZE SCORE REF
+  useEffect(() => {
+    scoreRef.current = activeScore;
+  }, [activeScore]);
 
   // PHRASE EVOLUTION ENGINE
   useEffect(() => {
@@ -112,35 +133,78 @@ export default function App() {
   };
 
   const applyScoreToEngine = (score: MusicScore) => {
-    if (!engineRef.current) return;
-    const smoothTime = 2; 
-    const safeDistortion = Math.min(score.effects.distortion, 0.4);
-    const safeReverb = Math.min(score.effects.reverbSend, 0.3);
-    const safeDelay = Math.min(score.effects.delaySend, 0.3);
-
-    engineRef.current.setParams(score.intensity, safeDistortion, smoothTime);
-    if (engineRef.current.masterBitcrush) {
-      engineRef.current.masterBitcrush.bits.rampTo(8 - (score.effects.bitcrush * 4), smoothTime);
-    }
-    if (engineRef.current.acidSynth.filter) {
-      engineRef.current.acidSynth.filter.Q.rampTo(score.effects.resonance, smoothTime);
-    }
-    engineRef.current.glitchSynth.volume.rampTo(-25 + (score.effects.glitchAmount * 15), smoothTime);
-    engineRef.current.masterDelay.wet.rampTo(safeDelay, smoothTime);
-    engineRef.current.masterReverb.wet.rampTo(safeReverb, smoothTime);
+    const dna = score.dna || { complexity: 0.5, energy: 0.5, darkness: 0.5, industrial: 0.5 };
     
-    // Bunker Rumble Mapping
-    if (engineRef.current.rumbleGain) {
-      const rumbleTarget = isPure ? 0.3 + (score.intensity * 0.4) : 0.6;
-      engineRef.current.rumbleGain.gain.rampTo(rumbleTarget, smoothTime);
-    }
+    // Fill in missing algorithmic components
+    if (!score.patterns) score.patterns = generateAlgorithmicPatterns(dna);
+    if (!score.automation) score.automation = generateAlgorithmicAutomation(dna);
 
-    if (engineRef.current.recursiveDelay) {
-      engineRef.current.recursiveDelay.feedback.rampTo(0.1 + (score.effects.glitchAmount * 0.5), smoothTime);
-      engineRef.current.recursiveDelay.wet.rampTo(score.effects.glitchAmount * 0.4, smoothTime);
-    }
-    if (engineRef.current.spectralFilter) {
-      engineRef.current.spectralFilter.frequency.rampTo(1000 + (score.effects.filterCutoff * 0.5), smoothTime);
+    const smoothTime = 2; 
+    const effects = score.effects || {
+      distortion: 0.1,
+      bitcrush: 0,
+      filterCutoff: 0.8,
+      resonance: 2,
+      delaySend: 0.1,
+      reverbSend: 0.1,
+      glitchAmount: 0.05,
+      rumbleDecay: 0.3
+    };
+    const safeDistortion = Math.min(safe(effects.distortion, 0.1), 0.4);
+    const safeReverb = Math.min(safe(effects.reverbSend, 0.1), 0.3);
+    const safeDelay = Math.min(safe(effects.delaySend, 0.1), 0.3);
+
+    if (engineRef.current) {
+      engineRef.current.setParams(safe(score.intensity, 0.5), safeDistortion, smoothTime);
+      
+      const targetBpm = safe(score.bpm, 135);
+      if (isPlaying) {
+        Tone.Transport.bpm.rampTo(Math.max(60, Math.min(220, targetBpm)), smoothTime);
+      } else {
+        Tone.Transport.bpm.value = Math.max(60, Math.min(220, targetBpm));
+        setBpm(targetBpm);
+      }
+
+      // Automation of Drone & Pressure
+      if (score.structure === 'empty_space' || score.bunkerAesthetic === 'void') {
+        engineRef.current.droneSynth.volume.rampTo(-18, smoothTime);
+        engineRef.current.pressureGain.gain.rampTo(0.1, smoothTime);
+      } else {
+        engineRef.current.droneSynth.volume.rampTo(-80, smoothTime);
+        engineRef.current.pressureGain.gain.rampTo(0, smoothTime);
+      }
+
+      engineRef.current.droneSynth.frequency.rampTo(Math.max(10, safe(score.droneFrequency, 30)), smoothTime);
+
+      if (engineRef.current.masterBitcrush) {
+        engineRef.current.masterBitcrush.bits.rampTo(Math.max(1, 8 - (safe(effects.bitcrush, 0) * 4)), smoothTime);
+      }
+      
+      if (engineRef.current.rumbleDelay) {
+        engineRef.current.rumbleDelay.feedback.rampTo(Math.min(Math.max(0, 0.2 + (safe(effects.rumbleDecay, 0.3) * 0.5)), 0.7), smoothTime);
+      }
+
+      if (engineRef.current.acidSynth.filter) {
+        engineRef.current.acidSynth.filter.Q.rampTo(Math.max(0.1, safe(effects.resonance, 2)), smoothTime);
+      }
+      engineRef.current.glitchSynth.volume.rampTo(Math.max(-100, -25 + (safe(effects.glitchAmount, 0.05) * 15)), smoothTime);
+      engineRef.current.masterDelay.wet.rampTo(Math.max(0, safeDelay), smoothTime);
+      engineRef.current.masterReverb.wet.rampTo(Math.max(0, safeReverb), smoothTime);
+      
+      // Bunker Rumble Mapping
+      if (engineRef.current.rumbleGain) {
+        const rumbleBase = isPure ? 0.3 : 0.6;
+        const rumbleTarget = rumbleBase + (safe(effects.rumbleDecay, 0.3) * 0.4);
+        engineRef.current.rumbleGain.gain.rampTo(Math.min(Math.max(0, rumbleTarget), 1.0), smoothTime);
+      }
+
+      if (engineRef.current.recursiveDelay) {
+        engineRef.current.recursiveDelay.feedback.rampTo(Math.min(Math.max(0, 0.1 + (safe(effects.glitchAmount, 0.05) * 0.5)), 0.8), smoothTime);
+        engineRef.current.recursiveDelay.wet.rampTo(Math.max(0, safe(effects.glitchAmount, 0.05) * 0.4), smoothTime);
+      }
+      if (engineRef.current.spectralFilter) {
+        engineRef.current.spectralFilter.frequency.rampTo(Math.max(20, 1000 + (safe(effects.filterCutoff, 0.5) * 5000)), smoothTime);
+      }
     }
   };
 
@@ -171,47 +235,170 @@ export default function App() {
     }
   };
 
-  // Initialize Engine
+  // Initialize Engine & STABLE Sequencer
   useEffect(() => {
     engineRef.current = AudioEngine.getInstance();
     analyserRef.current = new Tone.Analyser("waveform", 1024);
     Tone.getDestination().connect(analyserRef.current);
     
+    // Log Context State
+    const ctx = Tone.getContext();
+    ctx.on('statechange', (state) => {
+      console.log(`[AUDIO_CONTEXT_STATE]: ${state}`);
+    });
+
     const initialScore: MusicScore = {
       bpm: 135,
       mood: "Harmonic Start",
       intensity: 0.5,
-      structure: 'intro',
+      structure: 'empty_space',
       arrangementPhase: 'exploration',
       tensionLevel: 0.2,
       harmonicFocus: "INITIALIZING",
       influence: 'CORE', 
-      patterns: {
-        acid: Array(16).fill(0),
-        neuro: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
-        sub: [1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
-        kick: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
-        snare: [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
-        hihat: Array(16).fill(1).map((_, i) => i % 2 === 0 ? 1 : 0),
-        perc: Array(16).fill(0),
-        glitch: Array(16).fill(0),
-        spectral: Array(16).fill(0)
+      bunkerAesthetic: 'void',
+      dna: {
+        complexity: 0.3,
+        energy: 0.4,
+        darkness: 0.6,
+        industrial: 0.5
       },
       padChords: ["C2", "G2"],
+      droneFrequency: 30,
+      leadPhrase: ["C4"],
       effects: {
         distortion: 0.1,
         bitcrush: 0,
-        filterCutoff: 10000,
+        filterCutoff: 0.8,
         resonance: 2,
         delaySend: 0.1,
         reverbSend: 0.1,
-        glitchAmount: 0.05
+        glitchAmount: 0.05,
+        rumbleDecay: 0.3
       },
       artistCommentary: "EXTRACTOR READY. INITIALIZING HARMONIC GRID."
     };
+
+    // Ensure patterns exist for the initial score
+    initialScore.patterns = generateAlgorithmicPatterns(initialScore.dna);
+    initialScore.automation = generateAlgorithmicAutomation(initialScore.dna);
+    
+    scoreRef.current = initialScore;
     setActiveScore(initialScore);
 
+    // PERSISTENT SEQUENCER LOOP
+    const sequence = new Tone.Sequence((time, step) => {
+      const engine = engineRef.current;
+      const score = scoreRef.current;
+      if (!engine || !score) return;
+
+      // Handle Quantized Score Swap
+      if (step === 0 && pendingScoreRef.current) {
+        const nextScore = pendingScoreRef.current;
+        pendingScoreRef.current = null;
+        setActiveScore(nextScore); // This triggers UI update
+        scoreRef.current = nextScore; // This triggers immediate sequence update
+        Tone.Transport.bpm.rampTo(nextScore.bpm, 1);
+      }
+
+      setCurrentStep(step);
+      const p = score.patterns || ({} as any);
+      const a = score.automation || ({} as any);
+
+      // --- RUN AUTOMATION LANES (16th note precision) ---
+      if (a) {
+        const filterVal = safe(a.filterCutoff?.[step], 0.5);
+        const distVal = safe(a.distortionAmount?.[step], 0.1);
+        const noiseVal = safe(a.noiseTexture?.[step], 0.1);
+        const reverbVal = safe(a.reverbWet?.[step], 0.1);
+
+        engine.masterFilter.frequency.setTargetAtTime(Math.max(20, 200 + (filterVal * 12000)), time, 0.05);
+        engine.masterDistortion.distortion = Math.max(0, 0.1 + (distVal * 0.6));
+        engine.pressureGain.gain.setTargetAtTime(Math.max(0, noiseVal * 0.15), time, 0.1);
+        engine.masterReverb.wet.setTargetAtTime(Math.max(0, 0.05 + (reverbVal * 0.3)), time, 0.1);
+      }
+
+      // Drums & Sidechain Triggering
+      const kickVol = safe(p.kick?.[step], 0);
+      if (kickVol > 0) {
+        const kickVel = kickVol * (1 + safe(a?.rumbleIntensity?.[step], 0) * 0.5);
+        engine.drumKick.triggerAttackRelease("C1", "16n", time, Math.min(Math.max(0, kickVel), 1.1));
+        engine.triggerSidechain(time);
+        
+        // Strobe trigger
+        Tone.Draw.schedule(() => {
+          setIsStrobe(true);
+        }, time);
+        Tone.Draw.schedule(() => {
+          setIsStrobe(false);
+        }, time + 0.05);
+      }
+      
+      if (safe(p.snare?.[step], 0) > 0) engine.drumSnare.triggerAttackRelease("16n", time);
+      if (safe(p.hihat?.[step], 0) > 0) engine.drumHihat.triggerAttackRelease("32n", time);
+      if (safe(p.perc?.[step], 0) > 0) engine.drumPerc.triggerAttackRelease("16n", time);
+      if (safe(p.glitch?.[step], 0) > 0) engine.glitchSynth.triggerAttackRelease("16n", time);
+
+      // Lead Morph (Spectral Phrase)
+      const spectralVol = safe(p.spectral?.[step], 0);
+      const leadPhrase = score.leadPhrase || [];
+      if (step % 2 === 0 && leadPhrase.length > 0) {
+        const noteIdx = Math.floor(step / 2) % leadPhrase.length;
+        const note = leadPhrase[noteIdx];
+        if (note && spectralVol > 0) {
+          const freq = safeFreq(note, 440);
+          engine.spectralLead.frequency.setTargetAtTime(freq, time, 0.1);
+          engine.ribbonGain.gain.setTargetAtTime(Math.max(0, spectralVol * 0.6), time, 0.1); // Scaled
+        } else {
+          engine.ribbonGain.gain.setTargetAtTime(0, time, 0.1);
+        }
+      } else if (spectralVol === 0) {
+        engine.ribbonGain.gain.setTargetAtTime(0, time, 0.1);
+      }
+
+      // Bass Layers
+      const subVol = safe(p.sub?.[step], 0);
+      if (subVol > 0) {
+        const vel = Math.min(subVol, 0.8);
+        engine.subBass.triggerAttackRelease("C1", "16n", time, vel);
+      }
+      
+      // Curve Synth (Modulated by Curve Points)
+      const neuroVol = safe(p.neuro?.[step], 0);
+      if (neuroVol > 0) {
+        const notes = ["D1", "F1", "G1", "Ab1"];
+        const freq = Tone.Frequency(notes[step % notes.length]).toFrequency();
+        engine.neuroBass.frequency.setValueAtTime(freq, time);
+        engine.curveGain.gain.setTargetAtTime(neuroVol * 0.5, time, 0.1); // Scaled
+      } else {
+        engine.curveGain.gain.setTargetAtTime(0, time, 0.1);
+      }
+      
+      // Acid Synth
+      const acidVol = safe(p.acid?.[step], 0);
+      if (acidVol > 0) {
+        const notes = ["C1", "C2", "Eb1", "F2", "Bb1", "Db2"];
+        const note = notes[Math.floor(acidVol * notes.length) % notes.length];
+        const vel = Math.min(acidVol, 0.7);
+        engine.acidSynth.triggerAttackRelease(note, "16n", time, vel);
+      }
+
+      // Lead FM (Trigger on accents)
+      if (step % 8 === 4 && score.intensity > 0.7) {
+        engine.industrialFm.triggerAttackRelease("A3", "16n", time, 0.3);
+      }
+
+      // Pad trigger (Hard quantized release)
+      if (step === 0 && score.padChords.length > 0) {
+        engine.spacePad.releaseAll(time);
+        engine.spacePad.triggerAttackRelease(score.padChords, "2n", time, 0.3);
+      }
+    }, [...Array(STEPS).keys()], "16n");
+
+    sequence.start(0);
+
     return () => {
+      sequence.dispose();
       Tone.Transport.cancel();
       engineRef.current?.stop();
     };
@@ -270,91 +457,6 @@ export default function App() {
     return () => cancelAnimationFrame(animationId);
   }, [isPlaying, currentInfluence]);
 
-  useEffect(() => {
-    if (!activeScore) return;
-
-    Tone.Transport.cancel();
-    Tone.Transport.bpm.rampTo(activeScore.bpm, 1);
-
-    const sequence = new Tone.Sequence((time, step) => {
-      const engine = engineRef.current;
-      if (!engine) return;
-
-      // Handle Quantized Score Swap
-      if (step === 0 && pendingScoreRef.current) {
-        setActiveScore(pendingScoreRef.current);
-        pendingScoreRef.current = null;
-      }
-
-      setCurrentStep(step);
-      const p = activeScore.patterns;
-
-      // Drums & Sidechain Triggering
-      if (p.kick[step] > 0) {
-        engine.drumKick.triggerAttackRelease("C1", "16n", time);
-        engine.triggerSidechain(time);
-        
-        // Strobe trigger
-        Tone.Draw.schedule(() => {
-          setIsStrobe(true);
-          setTimeout(() => setIsStrobe(false), 50);
-        }, time);
-      }
-      
-      if (p.snare[step] > 0) engine.drumSnare.triggerAttackRelease("16n", time);
-      if (p.hihat[step] > 0) engine.drumHihat.triggerAttackRelease("32n", time);
-      if (p.perc[step] > 0) engine.drumPerc.triggerAttackRelease("16n", time);
-      if (p.glitch[step] > 0) engine.glitchSynth.triggerAttackRelease("16n", time);
-
-      // Ribbon Expression frequency (modulation from Step 0 and Ribbon Value)
-      if (p.spectral?.[step] > 0) {
-        const spectralFreqs = [1200, 2400, 3600, 800, 4800];
-        engine.spectralLead.frequency.setValueAtTime(spectralFreqs[step % spectralFreqs.length] * (ribbonValue + 0.5), time);
-      }
-
-      // Bass Layers
-      if (p.sub[step] > 0) {
-        const vel = Math.min(p.sub[step], 1);
-        engine.subBass.triggerAttackRelease("C1", "16n", time, vel);
-      }
-      
-      // Curve Synth (Modulated by Curve Points)
-      if (p.neuro[step] > 0) {
-        const notes = ["D1", "F1", "G1", "Ab1"];
-        const freq = Tone.Frequency(notes[step % notes.length]).toFrequency();
-        engine.neuroBass.frequency.setValueAtTime(freq, time);
-      }
-      
-      // Acid Synth
-      if (p.acid[step] > 0) {
-        const notes = ["C1", "C2", "Eb1", "F2", "Bb1", "Db2"];
-        const note = notes[Math.floor(p.acid[step] * notes.length) % notes.length];
-        const vel = Math.min(p.acid[step], 1);
-        engine.acidSynth.triggerAttackRelease(note, "16n", time, vel);
-      }
-
-      // Lead FM (Trigger on accents)
-      if (step % 8 === 4 && activeScore.intensity > 0.7) {
-        engine.industrialFm.triggerAttackRelease("A3", "16n", time, 0.4);
-      }
-
-      // Pad trigger (Hard quantized release)
-      if (step === 0 && activeScore.padChords.length > 0) {
-        engine.spacePad.releaseAll(time);
-        // "2n" ensures it releases half-measure later to clean up voice pool
-        engine.spacePad.triggerAttackRelease(activeScore.padChords, "2n", time, 0.4);
-      }
-    }, [...Array(STEPS).keys()], "16n");
-
-    if (isPlaying) {
-      sequence.start(0);
-    }
-
-    return () => {
-      sequence.dispose();
-    };
-  }, [isPlaying, activeScore]);
-
   const handleStartStop = async () => {
     if (!isPlaying) {
       await engineRef.current?.start();
@@ -364,22 +466,48 @@ export default function App() {
     setIsPlaying(!isPlaying);
   };
 
-  const triggerAiArtist = async (prompt: string) => {
+  const triggerAiArtist = async (triggerPrompt: string) => {
     if (isAiGenerating) return;
     setIsAiGenerating(true);
+    setDirectorLog(prev => [`> SIGNAL SENT: ${triggerPrompt}`, ...prev.slice(0, 15)]);
+    
     try {
-      const fullPrompt = `SCORE_STATE: [BPM:${bpm}, INTENSITY:${activeScore?.intensity}]. USER_SEED: ${JSON.stringify(gridSeeds)}. GOAL: ${prompt}`;
+      const fullPrompt = `ARCHITECT_SYNC: [BPM:${bpm}, INTENSITY:${activeScore?.intensity}, PHASE: ${activeScore?.arrangementPhase}]. 
+      USER_SIGNAL: ${triggerPrompt}. `;
+      
       const score = await getArtistScore(currentInfluence, fullPrompt, aestheticVector);
+      
+      // SCRUBBER: Remove invalid notes (chords like "Dmin" crash Tone.js PolySynth)
       if (score.padChords) {
-        score.padChords = score.padChords.filter(n => /^[A-G][b#]?[0-9]$/.test(n));
+        score.padChords = score.padChords
+          .map(n => n.replace(/minor|major|min|maj|m|M/gi, '')) // Try to salvage root note
+          .filter(n => /^[A-G][b#]?[0-9]?$/.test(n))
+          .map(n => /[0-9]/.test(n) ? n : `${n}2`); // Ensure octave
       }
+      if (score.leadPhrase) {
+        score.leadPhrase = score.leadPhrase
+          .map(n => n.replace(/minor|major|min|maj|m|M/gi, ''))
+          .filter(n => /^[A-G][b#]?[0-9]?$/.test(n))
+          .map(n => /[0-9]/.test(n) ? n : `${n}3`); // Lead usually higher
+      }
+
+      // ALGORITHMIC HARDENING: Ensure patterns and automation are never null
+      const dna = score.dna || { complexity: 0.5, energy: 0.5, darkness: 0.5, industrial: 0.5 };
+      if (!score.patterns) score.patterns = generateAlgorithmicPatterns(dna);
+      if (!score.automation) score.automation = generateAlgorithmicAutomation(dna);
+
       pendingScoreRef.current = score;
-      setMemoryBank(prev => [score, ...prev].slice(0, 10)); // Keep last 10
-      setDirectorLog(prev => [`[${new Date().toLocaleTimeString()}] ${score.artistCommentary}`, ...prev].slice(0, 5));
-      setTriggerCount(prev => prev + 1);
-      applyScoreToEngine(score);
+      setMemoryBank(prev => [score, ...prev].slice(0, 20)); 
+      setDirectorLog(prev => [`> EXTRACTOR RESPONSE: ${score.artistCommentary}`, ...prev.slice(0, 15)]);
+      
+      if (!isPlaying) {
+        setActiveScore(score);
+        scoreRef.current = score;
+        applyScoreToEngine(score);
+      }
     } catch (e) {
-      console.error(e);
+      console.error("EXTRACTION ERROR:", e);
+      setDirectorLog(prev => [`> SIGNAL LOST: FALLBACK_MODE_ACTIVE`, ...prev.slice(0, 15)]);
     } finally {
       setIsAiGenerating(false);
     }
@@ -527,12 +655,12 @@ export default function App() {
 
           {/* INTERACTIVE NEURAL GRID */}
           <div className="flex-1 bg-black border border-[#222] p-2 flex flex-col gap-1 overflow-hidden">
-             {activeScore && ['kick', 'snare', 'hihat', 'perc'].map(lane => (
+             {activeScore && activeScore.patterns && ['kick', 'snare', 'hihat', 'perc'].map(lane => (
                 <div key={lane} className="flex-1 flex gap-1 group">
                    <div className="w-8 flex items-center justify-center text-[7px] text-zinc-700 font-bold uppercase rotate-180 [writing-mode:vertical-lr] group-hover:text-[#FF3E00] transition-colors">{lane}</div>
                    <div className="flex-1 grid grid-cols-16 gap-0.5">
-                      {activeScore.patterns[lane as keyof typeof activeScore.patterns].map((v, i) => {
-                        const isSeeded = gridSeeds[lane][i] > 0;
+                      {(activeScore.patterns[lane] || Array(16).fill(0)).map((v: number, i: number) => {
+                        const isSeeded = gridSeeds[lane] && gridSeeds[lane][i] > 0;
                         return (
                           <div 
                             key={i} 
@@ -546,6 +674,25 @@ export default function App() {
                    </div>
                 </div>
              ))}
+          </div>
+
+          {/* AUTOMATION MONITOR - ABLETON STYLE */}
+          <div className="h-24 bg-black border border-[#222] p-2 flex flex-col gap-1">
+             <div className="flex justify-between items-center px-1">
+                <span className="text-[7px] text-zinc-600 uppercase tracking-widest">Automation Matrix</span>
+                <span className="text-[6px] text-zinc-800 font-mono italic">INTERPOLATED_16THS</span>
+             </div>
+             <div className="flex-1 grid grid-cols-16 gap-0.5">
+                {activeScore?.automation?.filterCutoff.map((val, i) => (
+                  <div key={i} className="flex flex-col gap-0.5">
+                    <div className="flex-1 bg-zinc-900/50 relative overflow-hidden">
+                       <motion.div animate={{ height: `${val * 100}%` }} className="absolute bottom-0 left-0 right-0 bg-[#00FF41]/20" />
+                       <motion.div animate={{ height: `${(activeScore.automation.distortionAmount[i] || 0) * 100}%` }} className="absolute bottom-0 left-0 right-0 bg-[#FF3E00]/10" />
+                    </div>
+                    <div className={`h-0.5 ${i === currentStep ? 'bg-[#00FF41]' : 'bg-zinc-800'}`} />
+                  </div>
+                ))}
+             </div>
           </div>
 
           {/* DYNAMIC CURVE MORPH */}

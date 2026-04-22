@@ -17,29 +17,28 @@ export interface MusicScore {
   bpm: number;
   mood: string;
   intensity: number;
-  structure: 'intro' | 'build' | 'drop' | 'breakdown' | 'outro';
+  structure: 'empty_space' | 'climax' | 'industrial_flow' | 'fragmentation';
   influence: string;
-  
-  // Arrangement & Evolutionary Logic
-  arrangementPhase: 'exploration' | 'consolidation' | 'climax' | 'decay';
+  arrangementPhase: 'exploration' | 'peak' | 'decay';
   tensionLevel: number; 
   harmonicFocus: string; 
+  bunkerAesthetic: string;
   
-  // Patterns (16 steps)
-  patterns: {
-    acid: number[];
-    neuro: number[]; // 0 for off, or specific multiplier
-    sub: number[];
-    kick: number[];
-    snare: number[];
-    hihat: number[];
-    perc: number[];
-    glitch: number[];
-    spectral: number[];
+  // High-level DNA for the algorithmic engine
+  dna: {
+    complexity: number;
+    energy: number;
+    darkness: number;
+    industrial: number;
   };
+
+  // Optional overrides
+  patterns?: Record<string, number[]>;
+  automation?: Record<string, number[]>;
   
-  // Melodic Information
-  padChords: string[]; 
+  leadPhrase: string[]; 
+  padChords: string[];
+  droneFrequency: number;
   
   effects: {
     distortion: number;
@@ -49,6 +48,7 @@ export interface MusicScore {
     delaySend: number;
     reverbSend: number;
     glitchAmount: number;
+    rumbleDecay: number;
   };
   
   artistCommentary: string;
@@ -59,29 +59,20 @@ export async function getArtistScore(influence: string, trigger: string, vector:
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: `You are the Lead Music Director of the C-HELL Extractor performance engine. 
-      Your mission: SEAMLESS AUTONOMOUS CONCERT ARRANGEMENT with HIGH-LEVEL SONIC RESEARCH.
+      Your mission: SEAMLESS AUTONOMOUS CONCERT ARRANGEMENT.
       
       CURRENT PERFORMANCE VECTOR:
       - X Axis (0=Ethereal, 1=Brutal): ${vector.x}
       - Y Axis (0=Static, 1=Chaotic): ${vector.y}
       
-      COMPOSITIONAL MANDATES (BUNKER TECHNO):
-      1. ARRANGEMENT PHASE: 
-         - exploration: Thin textures, searching rhythms.
-         - consolidation: Solidifying grooves, adding Sub-Rumble weight.
-         - climax: Peak intensity, high density, Industrial saturation.
-         - decay: Fragmenting patterns, heavy reverb, dissolving structures.
-      2. GENRE AESTHETICS: 
-         - TECHNO: Hypnotic, linear. Focus on "Rumble" bass textures.
-         - VOID: Cinematic space, sub-harmonic drones, large polyphonic chord clusters.
-         - ACID: Liquid resonance, polyphonic 303 clusters.
-         - CORE: Maximum energy, breakbeats, industrial percussion clanks.
-      3. POLYPHONY & CHORDS:
-         - Provide rich, complex chord structures (e.g., ["C3", "Eb3", "G3", "Bb3", "D4"]).
-         - Use harmonicFocus to describe the sonic direction (e.g., "Minor 9th Dissonance", "Metallic Resonant Clusters").
-      4. VECTOR INFLUENCE: 
-         - High X: Brutalism. Increase distortion, rumble gain, and metallic textures.
-         - High Y: Chaos. Increase glitch complexity and unpredictable melodic phrasing.
+      You must return a JSON MusicScore.
+      Focus on the DNA (complexity, energy, darkness, industrial) between 0 and 1.
+      This DNA drives a high-precision algorithmic engine.
+      
+      CRITICAL INSTRUCTIONS FOR HARMONY:
+      - padChords: Array of exactly 4-5 notes (e.g., ["C2", "G2", "Bb2", "Eb3"]). DO NOT USE CHORD NAMES LIKE "Dmin". 
+      - leadPhrase: Array of 8-16 notes (e.g., ["C3", "D3", "F3"]). ONLY INDIVIDUAL NOTES.
+      - droneFrequency: A number between 20 and 80 (Hz).
       
       User Signal / Context: ${trigger}
       Current Mode: ${influence}
@@ -95,26 +86,25 @@ export async function getArtistScore(influence: string, trigger: string, vector:
           bpm: { type: Type.NUMBER },
           mood: { type: Type.STRING },
           intensity: { type: Type.NUMBER },
-          structure: { type: Type.STRING, enum: ['intro', 'build', 'drop', 'breakdown', 'outro'] },
-          arrangementPhase: { type: Type.STRING, enum: ['exploration', 'consolidation', 'climax', 'decay'] },
+          structure: { type: Type.STRING, enum: ['empty_space', 'climax', 'industrial_flow', 'fragmentation'] },
+          arrangementPhase: { type: Type.STRING, enum: ['exploration', 'peak', 'decay'] },
           tensionLevel: { type: Type.NUMBER },
           harmonicFocus: { type: Type.STRING },
           influence: { type: Type.STRING },
-          patterns: {
+          bunkerAesthetic: { type: Type.STRING },
+          dna: {
             type: Type.OBJECT,
             properties: {
-              acid: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-              neuro: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-              sub: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-              kick: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-              snare: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-              hihat: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-              perc: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-              glitch: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-              spectral: { type: Type.ARRAY, items: { type: Type.NUMBER } }
-            }
+              complexity: { type: Type.NUMBER },
+              energy: { type: Type.NUMBER },
+              darkness: { type: Type.NUMBER },
+              industrial: { type: Type.NUMBER }
+            },
+            required: ["complexity", "energy", "darkness", "industrial"]
           },
+          leadPhrase: { type: Type.ARRAY, items: { type: Type.STRING } },
           padChords: { type: Type.ARRAY, items: { type: Type.STRING } },
+          droneFrequency: { type: Type.NUMBER },
           effects: {
             type: Type.OBJECT,
             properties: {
@@ -124,12 +114,14 @@ export async function getArtistScore(influence: string, trigger: string, vector:
               resonance: { type: Type.NUMBER },
               delaySend: { type: Type.NUMBER },
               reverbSend: { type: Type.NUMBER },
-              glitchAmount: { type: Type.NUMBER }
-            }
+              glitchAmount: { type: Type.NUMBER },
+              rumbleDecay: { type: Type.NUMBER }
+            },
+            required: ["distortion", "bitcrush", "filterCutoff", "resonance", "delaySend", "reverbSend", "glitchAmount", "rumbleDecay"]
           },
           artistCommentary: { type: Type.STRING }
         },
-        required: ["bpm", "mood", "intensity", "structure", "arrangementPhase", "tensionLevel", "harmonicFocus", "influence", "patterns", "padChords", "effects", "artistCommentary"]
+        required: ["bpm", "mood", "intensity", "structure", "arrangementPhase", "tensionLevel", "harmonicFocus", "influence", "bunkerAesthetic", "dna", "leadPhrase", "padChords", "droneFrequency", "effects", "artistCommentary"]
       }
     }
   });
